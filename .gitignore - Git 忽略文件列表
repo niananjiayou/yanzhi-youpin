@@ -47,8 +47,7 @@ share/python-wheels/
 # 输出文件（会自动生成）
 结构化分析结果.json
 最终分析报告/
-*.png
-*.jpg
+
 
 # 系统文件
 .DS_Store
