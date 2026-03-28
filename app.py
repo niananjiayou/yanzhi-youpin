@@ -1,6 +1,6 @@
 
 # app.py - 把你的 analysis.py 包装成Web接口
-# 你的 analysis.py 一行不用改！
+# 你的 analysis.py 一行不用改
 
 from flask import Flask, request, jsonify, send_from_directory
 import json, os, re, time, io, base64
@@ -134,8 +134,8 @@ def analyze():
                 'total_reviews':         len(work_df),
                 'category_distribution': cat_counts,
                 'aspect_mention_count':  aspect_stats,
-                'good_keywords':         good_kw,
-                'bad_keywords':          bad_kw,
+                'good_keywords':         good_kw_str,
+                'bad_keywords':          bad_kw_str,
                 'suggestion':            suggestion,
                 'good_wordcloud_base64': img_to_b64(good_wc_path),
                 'bad_wordcloud_base64':  img_to_b64(bad_wc_path),
