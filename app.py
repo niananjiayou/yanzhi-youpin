@@ -32,7 +32,11 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
-        # ✅ 修复：转DataFrame，并自动补全缺失字段
+        # ✅ 核心修复：兼容单个对象 和 对象数组 两种情况
+        if isinstance(reviews_list, dict):
+            reviews_list = [reviews_list]
+
+        # ✅ 转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
 
         # 如果传入的是纯字符串列表，自动把唯一列设为 content
