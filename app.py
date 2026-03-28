@@ -32,11 +32,28 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
+        df = pd.DataFrame(reviews_list)
+
+        # 如果 reviews 传入的是纯字符串列表，自动补全字段
+        if COL_CONTENT not in df.columns and len(df.columns) == 1:
+            df.columns = [COL_CONTENT]
+        if COL_PRODUCT not in df.columns:
+           df[COL_PRODUCT] = '未知商品'
+        if COL_RATING not in df.columns:
+            df[COL_RATING] = 3
+        if COL_LIKES in df.columns:
+            df[COL_LIKES] = pd.to_numeric(df[COL_LIKES], errors='coerce').fillna(0).astype(int)
+        else:
+            df[COL_LIKES] = 0
+
         # 转DataFrame，列名和你的代码完全一致
         df = pd.DataFrame(reviews_list)
+        if COL_LIKES in df.columns:
         df[COL_LIKES] = pd.to_numeric(
-            df.get(COL_LIKES, 0), errors='coerce').fillna(0).astype(int)
-
+        df[COL_LIKES], errors='coerce').fillna(0).astype(int)
+        else:
+        df[COL_LIKES] = 0
+    
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         all_results = []
 
