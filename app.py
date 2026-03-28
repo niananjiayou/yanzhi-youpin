@@ -105,11 +105,13 @@ def analyze():
                 ' '.join(bad_df[COL_CONTENT].tolist()),  '差评', category_name)
 
             # [6] 词云生成
+            good_kw_str = "、".join(good_kw.keys()) if good_kw else ""
+            bad_kw_str  = "、".join(bad_kw.keys())  if bad_kw  else ""
             good_wc_path = os.path.join(folder, '词云_真实优点.png')
             bad_wc_path  = os.path.join(folder, '词云_真实缺点.png')
             generate_wordcloud(good_kw, good_wc_path, 'Blues')
             generate_wordcloud(bad_kw,  bad_wc_path,  'YlOrRd')
-
+            
             def img_to_b64(path):
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
