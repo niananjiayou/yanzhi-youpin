@@ -32,28 +32,28 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
+        # 转DataFrame，列名和你的代码完全一致
         df = pd.DataFrame(reviews_list)
 
-        # 如果 reviews 传入的是纯字符串列表，自动补全字段
+        # ✅ 修复：如果传入的是纯字符串列表，自动补全字段
+        if df.empty:
+            return jsonify({'success': False, 'error': '评论数据为空'}), 400
+
         if COL_CONTENT not in df.columns and len(df.columns) == 1:
             df.columns = [COL_CONTENT]
         if COL_PRODUCT not in df.columns:
-           df[COL_PRODUCT] = '未知商品'
+            df[COL_PRODUCT] = '未知商品'
         if COL_RATING not in df.columns:
             df[COL_RATING] = 3
+        if COL_TIME not in df.columns:
+            df[COL_TIME] = ''
+
+        # ✅ 修复：安全处理 COL_LIKES，避免 int 没有 fillna 的报错
         if COL_LIKES in df.columns:
             df[COL_LIKES] = pd.to_numeric(df[COL_LIKES], errors='coerce').fillna(0).astype(int)
         else:
             df[COL_LIKES] = 0
 
-        # 转DataFrame，列名和你的代码完全一致
-        df = pd.DataFrame(reviews_list)
-        if COL_LIKES in df.columns:
-        df[COL_LIKES] = pd.to_numeric(
-        df[COL_LIKES], errors='coerce').fillna(0).astype(int)
-        else:
-        df[COL_LIKES] = 0
-    
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         all_results = []
 
@@ -69,9 +69,9 @@ def analyze():
             hard_in = work_df[work_df['hard_label'] == '通过'].copy()
 
             # [2] 品类识别
-            sample_reviews           = hard_in[COL_CONTENT].tolist()[:15]
+            sample_reviews                    = hard_in[COL_CONTENT].tolist()[:15]
             ai_category_name, dynamic_aspects = ai_detect_category_and_aspects(sample_reviews)
-            category_name            = ai_category_name if ai_category_name else product_name
+            category_name                     = ai_category_name if ai_category_name else product_name
 
             # [3] AI软分类（并发，和你原来完全一样）
             if not os.getenv('ZHIPUAI_API_KEY'):
@@ -177,12 +177,11 @@ def get_result():
             data = json.load(f)
         return jsonify({'success': True, 'results': data})
     except FileNotFoundError:
-        # 文件不存在时返回空数据，不报错
         return jsonify({
             'success': False,
             'results': [],
             'message': '暂无分析数据，请先调用 /analyze 接口进行分析'
-        }), 200  # 注意返回200而不是404，避免dashboard报错
+        }), 200
 
 
 if __name__ == '__main__':
