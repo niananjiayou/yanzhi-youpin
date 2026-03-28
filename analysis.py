@@ -538,14 +538,14 @@ def run():
         bad_kw_str  = "、".join(bad_kw.keys())  if bad_kw  else ""
 
 
-# ✅ 词云传dict（原来就是对的）
-generate_wordcloud(good_kw, os.path.join(folder, "词云_真实优点.png"), "Blues")
-generate_wordcloud(bad_kw,  os.path.join(folder, "词云_真实缺点.png"), "YlOrRd")
+        # ✅ 词云传dict
+        generate_wordcloud(good_kw, os.path.join(folder, "词云_真实优点.png"), "Blues")
+        generate_wordcloud(bad_kw,  os.path.join(folder, "词云_真实缺点.png"), "YlOrRd")
 
-# ✅ 新增：转成字符串供JSON和扣子使用
-good_kw_str = "、".join(good_kw.keys()) if good_kw else ""
-bad_kw_str  = "、".join(bad_kw.keys())  if bad_kw  else ""
-
+        # ✅ 新增：转成字符串供JSON和扣子使用
+        good_kw_str = "、".join(good_kw.keys()) if good_kw else ""
+        bad_kw_str  = "、".join(bad_kw.keys())  if bad_kw  else ""
+        
         # ── F: AI建议 ────────────────────────────────────────────
         print("  [6/6] AI建议生成...")
         suggestion = ai_generate_suggestion(
