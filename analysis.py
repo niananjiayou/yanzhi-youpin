@@ -322,6 +322,11 @@ def ai_generate_suggestion(
 # ══════════════════════════════════════════════════════════════════
 
 def find_font() -> str:
+    # ✅ 优先使用项目根目录的字体（Render 服务器专用）
+    local_font = "NotoSansSC-VariableFont_wght.ttf"
+    if os.path.exists(local_font):
+        return local_font
+
     candidates = [
         "/mnt/c/Windows/Fonts/simsun.ttc",
         "/mnt/c/Windows/Fonts/simhei.ttf",
