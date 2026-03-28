@@ -32,23 +32,18 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
-        # 转DataFrame，列名和你的代码完全一致
+        # ✅ 修复：转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
 
-        # ✅ 修复：如果传入的是纯字符串列表，自动补全字段
-        if df.empty:
-            return jsonify({'success': False, 'error': '评论数据为空'}), 400
-
+        # 如果传入的是纯字符串列表，自动把唯一列设为 content
         if COL_CONTENT not in df.columns and len(df.columns) == 1:
             df.columns = [COL_CONTENT]
+
+        # 补全缺失列
         if COL_PRODUCT not in df.columns:
             df[COL_PRODUCT] = '未知商品'
         if COL_RATING not in df.columns:
             df[COL_RATING] = 3
-        if COL_TIME not in df.columns:
-            df[COL_TIME] = ''
-
-        # ✅ 修复：安全处理 COL_LIKES，避免 int 没有 fillna 的报错
         if COL_LIKES in df.columns:
             df[COL_LIKES] = pd.to_numeric(df[COL_LIKES], errors='coerce').fillna(0).astype(int)
         else:
@@ -69,11 +64,11 @@ def analyze():
             hard_in = work_df[work_df['hard_label'] == '通过'].copy()
 
             # [2] 品类识别
-            sample_reviews                    = hard_in[COL_CONTENT].tolist()[:15]
+            sample_reviews = hard_in[COL_CONTENT].tolist()[:15]
             ai_category_name, dynamic_aspects = ai_detect_category_and_aspects(sample_reviews)
-            category_name                     = ai_category_name if ai_category_name else product_name
+            category_name = ai_category_name if ai_category_name else product_name
 
-            # [3] AI软分类（并发，和你原来完全一样）
+            # [3] AI软分类（并发）
             if not os.getenv('ZHIPUAI_API_KEY'):
                 hard_in['ai_category'] = 'AI未开启'
             else:
@@ -109,13 +104,12 @@ def analyze():
             bad_kw  = ai_extract_keywords(
                 ' '.join(bad_df[COL_CONTENT].tolist()),  '差评', category_name)
 
-            # [6] 词云生成（含蒙版、配色，完全用你的原函数）
+            # [6] 词云生成
             good_wc_path = os.path.join(folder, '词云_真实优点.png')
             bad_wc_path  = os.path.join(folder, '词云_真实缺点.png')
             generate_wordcloud(good_kw, good_wc_path, 'Blues')
             generate_wordcloud(bad_kw,  bad_wc_path,  'YlOrRd')
 
-            # 词云转base64（方便扣子直接展示）
             def img_to_b64(path):
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
@@ -146,7 +140,7 @@ def analyze():
             }
             all_results.append(product_result)
 
-        # 同时写入json文件，dashboard.html可以直接读
+        # 写入json文件
         with open(MERGED_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
 
@@ -169,7 +163,7 @@ def health():
     return jsonify({'status': 'ok', 'service': '言之有品·评论分析API'})
 
 
-# ── 接口4：dashboard读取分析结果 ── ✅ 新增的接口 ──────
+# ── 接口4：dashboard读取分析结果 ──────────────────────
 @app.route('/api/result')
 def get_result():
     try:
