@@ -1,3 +1,4 @@
+
 # app.py - 把你的 analysis.py 包装成Web接口
 # 你的 analysis.py 一行不用改！
 
@@ -123,7 +124,6 @@ def analyze():
                 'good_keywords':         good_kw,
                 'bad_keywords':          bad_kw,
                 'suggestion':            suggestion,
-                # 词云base64，扣子可以直接用<img src="data:image/png;base64,...">展示
                 'good_wordcloud_base64': img_to_b64(good_wc_path),
                 'bad_wordcloud_base64':  img_to_b64(bad_wc_path),
             }
@@ -150,6 +150,22 @@ def dashboard():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'service': '言之有品·评论分析API'})
+
+
+# ── 接口4：dashboard读取分析结果 ── ✅ 新增的接口 ──────
+@app.route('/api/result')
+def get_result():
+    try:
+        with open(MERGED_JSON_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return jsonify({'success': True, 'results': data})
+    except FileNotFoundError:
+        # 文件不存在时返回空数据，不报错
+        return jsonify({
+            'success': False,
+            'results': [],
+            'message': '暂无分析数据，请先调用 /analyze 接口进行分析'
+        }), 200  # 注意返回200而不是404，避免dashboard报错
 
 
 if __name__ == '__main__':
