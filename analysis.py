@@ -270,9 +270,9 @@ def ai_generate_suggestion(
     fake_rate = round(fake_count / total * 100, 1) if total > 0 else 0
 
 top_aspects = sorted(aspect_stats.items(), key=lambda x: -x[1])[:5]
-    top_str  = "、".join([f"{k}({v}条)" for k, v in top_aspects if v > 0]) or "暂无数据"
-    good_str = "、".join(list(good_kw.keys())[:8]) if good_kw else "暂无"
-    bad_str  = "、".join(list(bad_kw.keys())[:8])  if bad_kw  else "暂无"
+top_str  = "、".join([f"{k}({v}条)" for k, v in top_aspects if v > 0]) or "暂无数据"
+good_str = "、".join(list(good_kw.keys())[:8]) if good_kw else "暂无"
+bad_str  = "、".join(list(bad_kw.keys())[:8])  if bad_kw  else "暂无"
 
     prompt = f"""你是一位经验丰富的电商运营顾问，正在给一位小商家写产品分析报告。
 请用亲切、通俗易懂的语言，让商家一看就明白，一学就能用。
