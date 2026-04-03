@@ -107,14 +107,22 @@ def analyze():
             bad_kw  = ai_extract_keywords(
                 ' '.join(bad_df[COL_CONTENT].tolist()),  '差评', category_name)
 
-            # [6] 词云生成
+            # ✅ 类型检查和转换（修复关键词格式问题）
+            if not isinstance(good_kw, dict):
+                good_kw = {}
+            if not isinstance(bad_kw, dict):
+                bad_kw = {}
+
             good_kw_str = "、".join(good_kw.keys()) if good_kw else ""
             bad_kw_str  = "、".join(bad_kw.keys())  if bad_kw  else ""
+            
+            # [6] 词云生成
             good_wc_path = os.path.join(folder, '词云_真实优点.png')
             bad_wc_path  = os.path.join(folder, '词云_真实缺点.png')
             generate_wordcloud(good_kw, good_wc_path, 'Blues')
             generate_wordcloud(bad_kw,  bad_wc_path,  'YlOrRd')
             
+            # Base64转换函数
             def img_to_b64(path):
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
