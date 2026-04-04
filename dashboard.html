@@ -207,6 +207,7 @@ function getQueryParams() {
   };
 }
 
+  
 // ══════════════════════════════════════════════
 //  读取数据（多个源）
 // ══════════════════════════════════════════════
@@ -214,89 +215,157 @@ async function loadData() {
   try {
     const urlParams = getQueryParams();
     
-    // 优先级1：URL参数中直接传递了 results JSON
+    console.log('🔍 URL参数:', {
+      job_id: urlParams.job_id,
+      api_url: urlParams.api_url,
+      results: urlParams.results ? '有' : '无'
+    });
+    
+    // ✅ 优先级1：URL参数中直接传递了 results JSON
     if (urlParams.results) {
       console.log('✅ 从 URL 参数读取数据');
       try {
         allData = JSON.parse(decodeURIComponent(urlParams.results));
-        dataSource = '来自扣子 - URL参数';
+        dataSource = '来自扣子 - URL参数直传';
         init();
         return;
       } catch(e) {
-        console.error('URL参数JSON解析失败', e);
+        console.error('❌ URL参数JSON解析失败:', e);
       }
     }
     
-    // 优先级2：通过 job_id 异步轮询获取结果
+    // ✅ 优先级2：通过 job_id 异步轮询获取结果
     if (urlParams.job_id) {
-      console.log('✅ 通过 job_id 异步轮询');
+      console.log(`✅ 开始轮询任务: ${urlParams.job_id}`);
       dataSource = '来自扣子 - 异步轮询';
-      await pollJobResult(urlParams.job_id, urlParams.api_url);
+      const success = await pollJobResult(
+        urlParams.job_id, 
+        urlParams.api_url || 'https://yanzhi-youpin.onrender.com'
+      );
+      if (success) return;
+    }
+    
+    // ✅ 优先级3：尝试读取最新结果
+    console.log('✅ 尝试读取最新分析结果');
+    const res = await fetch('/analyze/latest');
+    const data = await res.json();
+    
+    if (data.success && data.results) {
+      allData = data.results;
+      dataSource = '最新分析结果';
+      init();
       return;
     }
     
-    // 优先级3：从本地 JSON 文件加载（测试用）
+    // ✅ 优先级4：本地 JSON 文件（仅测试）
     console.log('✅ 尝试读取本地 JSON 文件');
-    const res = await fetch('./结构化分析结果.json');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    allData = await res.json();
-    dataSource = '本地 JSON 文件';
-    init();
+    const localRes = await fetch('./结构化分析结果.json');
+    if (localRes.ok) {
+      allData = await localRes.json();
+      dataSource = '本地 JSON 文件';
+      init();
+      return;
+    }
+    
+    showError('无法获取任何分析数据');
     
   } catch(e) {
+    console.error('❌ 加载数据异常:', e);
     showError(e.message);
   }
 }
 
 // ══════════════════════════════════════════════
-//  异步轮询获取结果
+//  异步轮询获取结果 - 改进版
 // ══════════════════════════════════════════════
 async function pollJobResult(jobId, apiUrl) {
-  const baseUrl = apiUrl || 'https://yanzhi-youpin.onrender.com';
-  const maxRetries = 60;  // 最多轮询60次（10分钟）
+  const maxRetries = 300;  // 5分钟（1秒轮询一次）
   let retries = 0;
   
-  const poll = async () => {
-    try {
-      const res = await fetch(`${baseUrl}/analyze/result/${jobId}`);
-      const data = await res.json();
-      
-      if (data.success && data.results) {
-        console.log('✅ 异步任务完成，获取结果', data.results);
-        allData = data.results;
-        init();
-        return true;
-      }
-      
-      if (data.status === 'processing') {
-        console.log(`⏳ 任务进行中... (${data.progress}%)`);
+  // 显示加载状态
+  document.getElementById('tabBar').innerHTML = `
+    <div class="loading">
+      <div class="spinner"></div>
+      <span>📊 正在轮询分析结果 (${jobId})...</span>
+    </div>
+  `;
+  
+  return new Promise(async (resolve) => {
+    const poll = async () => {
+      try {
+        const url = `${apiUrl}/analyze/result/${jobId}`;
+        console.log(`轮询 (${retries}/${maxRetries}):`, url);
+        
+        const res = await fetch(url);
+        const data = await res.json();
+        
+        // ✅ 成功：获取到结果
+        if (data.success && data.results) {
+          console.log('✅ 任务完成，获取结果:', data.results);
+          allData = data.results;
+          init();
+          resolve(true);
+          return;
+        }
+        
+        // 处理中：显示进度
+        if (data.status === 'processing') {
+          const progress = data.progress || 0;
+          const product = data.current_product || '...';
+          console.log(`⏳ 处理中... ${progress}% (${product})`);
+          
+          document.getElementById('tabBar').innerHTML = `
+            <div class="loading">
+              <div class="spinner"></div>
+              <span>⏳ 正在处理: ${product} (${progress}%)</span>
+            </div>
+          `;
+          
+          retries++;
+          if (retries < maxRetries) {
+            setTimeout(poll, 1000);  // 1秒轮询一次
+          } else {
+            showError('❌ 任务超时（5分钟未完成）');
+            resolve(false);
+          }
+          return;
+        }
+        
+        // 失败
+        if (data.status === 'failed') {
+          console.error('❌ 任务失败:', data.error);
+          showError(`❌ 分析失败: ${data.error}`);
+          resolve(false);
+          return;
+        }
+        
+        // 未知状态
+        console.warn('⚠️ 未知状态:', data);
         retries++;
         if (retries < maxRetries) {
-          // 每2秒轮询一次
-          setTimeout(poll, 2000);
+          setTimeout(poll, 1000);
         } else {
-          showError('任务超时，请稍后重试');
+          showError('任务状态未知，请重试');
+          resolve(false);
         }
-        return false;
+        
+      } catch(e) {
+        console.error('❌ 轮询异常:', e);
+        retries++;
+        
+        if (retries < maxRetries) {
+          console.log(`⚠️ 网络异常，${1}秒后重试...`);
+          setTimeout(poll, 1000);
+        } else {
+          showError('❌ 网络连接异常');
+          resolve(false);
+        }
       }
-      
-      if (data.status === 'failed') {
-        showError(`任务失败: ${data.error}`);
-        return false;
-      }
-      
-    } catch(e) {
-      console.error('轮询异常', e);
-      retries++;
-      if (retries < maxRetries) {
-        setTimeout(poll, 2000);
-      } else {
-        showError('网络连接异常');
-      }
-    }
-  };
-  
-  await poll();
+    };
+    
+    // 立即开始轮询
+    await poll();
+  });
 }
 
 // ══════════════════════════════════════════════
