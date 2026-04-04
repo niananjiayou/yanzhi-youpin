@@ -1,4 +1,3 @@
-
 from flask import Flask, request, jsonify, send_from_directory
 import json, os, re, time, base64, tempfile, shutil, uuid, threading, csv
 import pandas as pd
@@ -22,7 +21,7 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 analysis_jobs = {}
 jobs_lock = Lock()
 
-# ✅ API速率限制
+# ✅ 问题9修复：全局API速率限制
 api_call_count = 0
 api_call_lock = Lock()
 api_call_limit = 100
@@ -53,7 +52,6 @@ def rate_limit_check():
     
     with api_call_lock:
         current_time = time.time()
-        # 每24小时重置计数
         if current_time - api_reset_time > 86400:
             api_call_count = 0
             api_reset_time = current_time
@@ -163,7 +161,6 @@ def process_analysis(job_id, reviews_list, api_key):
             good_wc_path = os.path.join(temp_dir, f'wordcloud_good_{product_idx}.png')
             bad_wc_path = os.path.join(temp_dir, f'wordcloud_bad_{product_idx}.png')
             
-            # 词云异步生成
             try:
                 wc_thread = threading.Thread(
                     target=generate_wordcloud,
@@ -193,11 +190,11 @@ def process_analysis(job_id, reviews_list, api_key):
                 fake_count=fake_count
             )
 
-            # ✅ 关键词转字符串
+            # ✅ 安全转换关键词
             good_kw_str = safe_keywords_to_string(good_kw)
             bad_kw_str = safe_keywords_to_string(bad_kw)
 
-            # ✅ 词云URL处理
+            # ✅ 优化3修复：词云文件保存改为URL模式
             os.makedirs('wordclouds', exist_ok=True)
             good_wc_filename = f'good_{job_id}_{product_idx}.png'
             bad_wc_filename = f'bad_{job_id}_{product_idx}.png'
@@ -247,7 +244,7 @@ def process_analysis(job_id, reviews_list, api_key):
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    """✅ 核心分析接口 - 支持异步处理"""
+    """核心分析接口 - 支持异步处理"""
     try:
         data = request.json
         reviews_list = data.get('reviews', [])
@@ -290,7 +287,7 @@ def analyze():
 
 @app.route('/analyze/status/<job_id>', methods=['GET'])
 def get_status(job_id):
-    """✅ 获取分析进度"""
+    """获取分析进度"""
     with jobs_lock:
         if job_id not in analysis_jobs:
             return jsonify({'success': False, 'error': '任务不存在'}), 404
@@ -309,7 +306,7 @@ def get_status(job_id):
 
 @app.route('/analyze/result/<job_id>', methods=['GET'])
 def get_result(job_id):
-    """✅ 获取分析结果"""
+    """获取分析结果"""
     with jobs_lock:
         if job_id not in analysis_jobs:
             return jsonify({'success': False, 'error': '任务不存在'}), 404
@@ -339,29 +336,36 @@ def get_result(job_id):
 
 @app.route('/wordcloud/<filename>')
 def serve_wordcloud(filename):
-    """✅ 词云文件服务（支持浏览器缓存）"""
+    """词云文件服务 - 支持浏览器缓存和安全检查"""
     try:
-        # 安全检查：防止路径穿越
-        if '..' in filename or '/' in filename:
-            return jsonify({'error': '非法路径'}), 403
+        # 安全检查：防止路径穿越攻击
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return {'error': '非法路径'}, 403
+        
+        # 只允许PNG文件
+        if not filename.endswith('.png'):
+            return {'error': '仅支持PNG文件'}, 403
         
         response = send_from_directory('wordclouds', filename)
         # 设置浏览器缓存7天
         response.cache_control.max_age = 604800
+        response.cache_control.public = True
         return response
     except Exception as e:
-        return jsonify({'error': str(e)}), 404
+        print(f"词云文件服务异常: {e}")
+        return {'error': '文件不存在'}, 404
 
 
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
+    """大屏应用"""
     return send_from_directory('.', 'dashboard.html')
 
 
 @app.route('/health')
 def health():
-    """✅ 健康检查端点（Render保活）"""
+    """健康检查端点（Render保活）"""
     return jsonify({
         'status': 'ok',
         'service': '言之有品·评论分析API',
@@ -394,6 +398,4 @@ def get_legacy_result():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
-</parameter>
-</invoke>
+    app.run(host='0.0.0.0', port=port, debug=False)
