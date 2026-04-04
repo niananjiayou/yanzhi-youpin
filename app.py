@@ -373,6 +373,34 @@ def health():
         'timestamp': time.time()
     })
 
+@app.route('/dashboard')
+def dashboard_with_jobid():
+    """✅ 根据 job_id 参数重定向或加载仪表板"""
+    job_id = request.args.get('job_id')
+    
+    if job_id:
+        # 检查任务是否存在
+        with jobs_lock:
+            if job_id in analysis_jobs:
+                print(f"📊 加载任务: {job_id}")
+                return send_from_directory('.', 'dashboard.html')
+            else:
+                # 任务不存在，尝试从 results 目录查找
+                result_file = f'results/{job_id}.json'
+                if os.path.exists(result_file):
+                    return send_from_directory('.', 'dashboard.html')
+        
+        # 任务未找到
+        return jsonify({'error': f'任务 {job_id} 不存在'}), 404
+    
+    # 没有 job_id，加载默认大屏
+    return send_from_directory('.', 'dashboard.html')
+
+
+@app.route('/')
+def home():
+    """主页 - 重定向到大屏"""
+    return send_from_directory('.', 'dashboard.html')
 
 @app.route('/analyze/latest')
 def get_latest_result():
