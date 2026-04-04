@@ -22,7 +22,7 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 analysis_jobs = {}
 jobs_lock = Lock()
 
-# ✅ 问题9修复：全局API速率限制
+# ✅ API速率限制
 api_call_count = 0
 api_call_lock = Lock()
 api_call_limit = 100
@@ -33,7 +33,6 @@ api_reset_time = time.time()
 #  工具函数
 # ══════════════════════════════════════════════════════════════════
 
-# ✅ 问题5修复：安全转换关键词格式
 def safe_keywords_to_string(keywords_dict):
     """安全转换关键词为字符串，处理各种格式"""
     if not keywords_dict:
@@ -48,7 +47,6 @@ def safe_keywords_to_string(keywords_dict):
     return str(keywords_dict)
 
 
-# ✅ 问题9修复：API速率限制检查
 def rate_limit_check():
     """检查今日API调用是否超限"""
     global api_call_count, api_reset_time
@@ -111,20 +109,17 @@ def process_analysis(job_id, reviews_list, api_key):
             category_name = ai_category_name if ai_category_name else product_name
 
             # [3] AI软分类（并发）
-            # ✅ 问题8修复：Render免费版自动降低并发数
             render_max_workers = max(1, MAX_WORKERS - 3) if os.getenv('RENDER') else MAX_WORKERS
             
             if not os.getenv('ZHIPUAI_API_KEY'):
                 hard_in['ai_category'] = 'AI未开启'
             else:
                 try:
-                    # ✅ 问题9修复：检查API速率限制
                     can_call, msg = rate_limit_check()
                     if not can_call:
                         print(f"⚠️  {msg}")
                         hard_in['ai_category'] = '配额已用完'
                     else:
-                        # ✅ 问题8修复：添加超时处理
                         with ThreadPoolExecutor(max_workers=render_max_workers) as executor:
                             futures = {
                                 executor.submit(
@@ -168,7 +163,7 @@ def process_analysis(job_id, reviews_list, api_key):
             good_wc_path = os.path.join(temp_dir, f'wordcloud_good_{product_idx}.png')
             bad_wc_path = os.path.join(temp_dir, f'wordcloud_bad_{product_idx}.png')
             
-            # ✅ 问题5/9修复：词云异步生成 + 超时保护
+            # 词云异步生成
             try:
                 wc_thread = threading.Thread(
                     target=generate_wordcloud,
@@ -198,11 +193,11 @@ def process_analysis(job_id, reviews_list, api_key):
                 fake_count=fake_count
             )
 
-            # ✅ 问题5修复：安全转换关键词
+            # ✅ 关键词转字符串
             good_kw_str = safe_keywords_to_string(good_kw)
             bad_kw_str = safe_keywords_to_string(bad_kw)
 
-            # ✅ 优化3修复：词云文件保存改为URL模式
+            # ✅ 词云URL处理
             os.makedirs('wordclouds', exist_ok=True)
             good_wc_filename = f'good_{job_id}_{product_idx}.png'
             bad_wc_filename = f'bad_{job_id}_{product_idx}.png'
@@ -342,33 +337,25 @@ def get_result(job_id):
     })
 
 
-# ✅ 优化3新增：词云文件服务（支持浏览器缓存）
 @app.route('/wordcloud/<filename>')
 def serve_wordcloud(filename):
-    """词云文件服务 - 支持浏览器缓存和安全检查"""
+    """✅ 词云文件服务（支持浏览器缓存）"""
     try:
-        # 安全检查：防止路径穿越攻击
-        if '..' in filename or '/' in filename or '\\' in filename:
-            return {'error': '非法路径'}, 403
-        
-        # 只允许PNG文件
-        if not filename.endswith('.png'):
-            return {'error': '仅支持PNG文件'}, 403
+        # 安全检查：防止路径穿越
+        if '..' in filename or '/' in filename:
+            return jsonify({'error': '非法路径'}), 403
         
         response = send_from_directory('wordclouds', filename)
-        # ✅ 设置浏览器缓存7天（604800秒）
+        # 设置浏览器缓存7天
         response.cache_control.max_age = 604800
-        response.cache_control.public = True
         return response
     except Exception as e:
-        print(f"词云文件服务异常: {e}")
-        return {'error': '文件不存在'}, 404
+        return jsonify({'error': str(e)}), 404
 
 
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
-    """✅ 大屏应用"""
     return send_from_directory('.', 'dashboard.html')
 
 
@@ -407,6 +394,6 @@ def get_legacy_result():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
 </parameter>
 </invoke>
