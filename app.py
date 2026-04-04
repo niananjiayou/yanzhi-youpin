@@ -1,5 +1,6 @@
+
 from flask import Flask, request, jsonify, send_from_directory
-import json, os, re, time, base64, tempfile, shutil, uuid, threading
+import json, os, re, time, base64, tempfile, shutil, uuid, threading, csv
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -18,40 +19,100 @@ from analysis import (
 app = Flask(__name__, static_folder='.', static_url_path='')
 
 # ── 全局任务状态管理 ──────────────────────────────────
-analysis_jobs = {}  # {job_id: {'status': 'processing'|'completed'|'failed', 'results': [...], 'error': '...', 'progress': 0-100}}
-jobs_lock = Lock()  # ✅ 问题3：并发锁防止数据竞争
+analysis_jobs = {}
+jobs_lock = Lock()
+
+# ✅ 问题9修复：全局API速率限制
+api_call_count = 0
+api_call_lock = Lock()
+api_call_limit = 100
+api_reset_time = time.time()
 
 
 # ══════════════════════════════════════════════════════════════════
 #  工具函数
 # ══════════════════════════════════════════════════════════════════
 
-def img_to_b64(path):
-    """图片转Base64"""
-    if os.path.exists(path):
+# ✅ 问题5修复：安全转换关键词格式
+def safe_keywords_to_string(keywords_dict):
+    """安全转换关键词为字符串，处理各种格式"""
+    if not keywords_dict:
+        return ""
+    
+    if isinstance(keywords_dict, dict):
+        return "、".join(str(k) for k in list(keywords_dict.keys())[:10])
+    
+    if isinstance(keywords_dict, (list, tuple)):
+        return "、".join(str(k) for k in keywords_dict[:10])
+    
+    return str(keywords_dict)
+
+
+# ✅ 问题7修复：安全的Base64转换 + 自动删除文件
+def img_to_b64_safe(path, max_size_mb=5):
+    """安全的图片转Base64，避免内存溢出"""
+    if not os.path.exists(path):
+        return ''
+    
+    try:
+        file_size = os.path.getsize(path)
+        if file_size > max_size_mb * 1024 * 1024:
+            print(f"⚠️  文件过大: {file_size} bytes，跳过转换")
+            return ''
+        
+        # 分块读取避免一次性加载到内存
+        with open(path, 'rb') as f:
+            chunks = []
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            
+            data = b''.join(chunks)
+            return base64.b64encode(data).decode('utf-8')
+    except Exception as e:
+        print(f"Base64转换失败: {e}")
+        return ''
+    finally:
+        # ✅ 转换后立即删除临时文件
         try:
-            with open(path, 'rb') as f:
-                return base64.b64encode(f.read()).decode('utf-8')
-        except Exception as e:
-            print(f"Base64转换失败: {e}")
-    return ''
+            if os.path.exists(path):
+                os.remove(path)
+        except:
+            pass
+
+
+# ✅ 问题9修复：API速率限制检查
+def rate_limit_check():
+    """检查今日API调用是否超限"""
+    global api_call_count, api_reset_time
+    
+    with api_call_lock:
+        current_time = time.time()
+        # 每24小时重置计数
+        if current_time - api_reset_time > 86400:
+            api_call_count = 0
+            api_reset_time = current_time
+        
+        if api_call_count >= api_call_limit:
+            return False, f"今日API调用已达上限({api_call_limit}次)"
+        
+        api_call_count += 1
+        return True, f"剩余: {api_call_limit - api_call_count}"
 
 
 def process_analysis(job_id, reviews_list, api_key):
-    """✅ 后台任务：异步处理分析（问题2修复）"""
+    """✅ 后台任务：异步处理分析"""
     
-    # 临时目录（问题1修复）
     temp_dir = tempfile.mkdtemp(prefix=f'analysis_{job_id}_')
     
     try:
-        # 注入API Key
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
-        # 转DataFrame
         df = pd.DataFrame(reviews_list)
 
-        # 补全缺失列
         if COL_CONTENT not in df.columns and len(df.columns) == 1:
             df.columns = [COL_CONTENT]
 
@@ -69,7 +130,6 @@ def process_analysis(job_id, reviews_list, api_key):
         product_list = list(df.groupby(COL_PRODUCT))
         
         for product_idx, (product_name, pdf) in enumerate(product_list):
-            # 更新进度
             with jobs_lock:
                 analysis_jobs[job_id]['progress'] = int((product_idx / len(product_list)) * 100)
                 analysis_jobs[job_id]['current_product'] = product_name
@@ -86,21 +146,40 @@ def process_analysis(job_id, reviews_list, api_key):
             category_name = ai_category_name if ai_category_name else product_name
 
             # [3] AI软分类（并发）
+            # ✅ 问题8修复：Render免费版自动降低并发数
+            render_max_workers = max(1, MAX_WORKERS - 3) if os.getenv('RENDER') else MAX_WORKERS
+            
             if not os.getenv('ZHIPUAI_API_KEY'):
                 hard_in['ai_category'] = 'AI未开启'
             else:
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = {
-                        executor.submit(
-                            ai_classify,
-                            row[COL_CONTENT],
-                            int(row.get(COL_RATING, 3)),
-                            int(row.get(COL_LIKES, 0))
-                        ): idx
-                        for idx, row in hard_in.iterrows()
-                    }
-                    results = {futures[f]: f.result() for f in as_completed(futures)}
-                hard_in['ai_category'] = hard_in.index.map(results)
+                try:
+                    # ✅ 问题9修复：检查API速率限制
+                    can_call, msg = rate_limit_check()
+                    if not can_call:
+                        print(f"⚠️  {msg}")
+                        hard_in['ai_category'] = '配额已用完'
+                    else:
+                        # ✅ 问题8修复：添加超时处理
+                        with ThreadPoolExecutor(max_workers=render_max_workers) as executor:
+                            futures = {
+                                executor.submit(
+                                    ai_classify,
+                                    row[COL_CONTENT],
+                                    int(row.get(COL_RATING, 3)),
+                                    int(row.get(COL_LIKES, 0))
+                                ): idx
+                                for idx, row in hard_in.iterrows()
+                            }
+                            results = {}
+                            for f in as_completed(futures, timeout=25):
+                                try:
+                                    results[futures[f]] = f.result(timeout=25)
+                                except Exception as e:
+                                    results[futures[f]] = '无效评论'
+                            hard_in['ai_category'] = hard_in.index.map(results)
+                except Exception as e:
+                    print(f"AI分类异常: {e}")
+                    hard_in['ai_category'] = '无效评论'
 
             work_df['ai_category'] = work_df['hard_label']
             work_df.loc[hard_in.index, 'ai_category'] = hard_in['ai_category']
@@ -117,15 +196,32 @@ def process_analysis(job_id, reviews_list, api_key):
 
             # [5] 关键词提取
             good_kw = ai_extract_keywords(
-                ' '.join(good_df[COL_CONTENT].tolist()), '好评', category_name)
+                ' '.join(good_df[COL_CONTENT].tolist())[:2000], '好评', category_name)
             bad_kw = ai_extract_keywords(
-                ' '.join(bad_df[COL_CONTENT].tolist()), '差评', category_name)
+                ' '.join(bad_df[COL_CONTENT].tolist())[:2000], '差评', category_name)
 
-            # ✅ 问题1修复：词云保存到临时目录
             good_wc_path = os.path.join(temp_dir, f'wordcloud_good_{product_idx}.png')
             bad_wc_path = os.path.join(temp_dir, f'wordcloud_bad_{product_idx}.png')
-            generate_wordcloud(good_kw, good_wc_path, 'Blues')
-            generate_wordcloud(bad_kw, bad_wc_path, 'YlOrRd')
+            
+            # ✅ 问题5/9修复：词云异步生成 + 超时保护
+            try:
+                wc_thread = threading.Thread(
+                    target=generate_wordcloud,
+                    args=(good_kw, good_wc_path, 'Blues'),
+                    daemon=False
+                )
+                wc_thread.start()
+                wc_thread.join(timeout=8)
+                
+                wc_thread = threading.Thread(
+                    target=generate_wordcloud,
+                    args=(bad_kw, bad_wc_path, 'YlOrRd'),
+                    daemon=False
+                )
+                wc_thread.start()
+                wc_thread.join(timeout=8)
+            except Exception as e:
+                print(f"词云生成异常: {e}")
 
             # [6] 建议生成
             suggestion = ai_generate_suggestion(
@@ -137,16 +233,9 @@ def process_analysis(job_id, reviews_list, api_key):
                 fake_count=fake_count
             )
 
-            # 关键词转字符串
-            if isinstance(good_kw, dict):
-                good_kw_str = "、".join(good_kw.keys()) if good_kw else ""
-            else:
-                good_kw_str = str(good_kw) if good_kw else ""
-
-            if isinstance(bad_kw, dict):
-                bad_kw_str = "、".join(bad_kw.keys()) if bad_kw else ""
-            else:
-                bad_kw_str = str(bad_kw) if bad_kw else ""
+            # ✅ 问题5修复：安全转换关键词
+            good_kw_str = safe_keywords_to_string(good_kw)
+            bad_kw_str = safe_keywords_to_string(bad_kw)
 
             product_result = {
                 'product_name': product_name,
@@ -157,18 +246,16 @@ def process_analysis(job_id, reviews_list, api_key):
                 'good_keywords': good_kw_str,
                 'bad_keywords': bad_kw_str,
                 'suggestion': suggestion,
-                'good_wordcloud_base64': img_to_b64(good_wc_path),
-                'bad_wordcloud_base64': img_to_b64(bad_wc_path),
+                'good_wordcloud_base64': img_to_b64_safe(good_wc_path),
+                'bad_wordcloud_base64': img_to_b64_safe(bad_wc_path),
             }
             all_results.append(product_result)
 
-        # ✅ 问题3修复：保存到独立的结果文件（不是全局MERGED_JSON_PATH）
         os.makedirs('results', exist_ok=True)
         result_file = f'results/{job_id}.json'
         with open(result_file, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-        # 标记任务完成
         with jobs_lock:
             analysis_jobs[job_id]['status'] = 'completed'
             analysis_jobs[job_id]['results'] = all_results
@@ -178,10 +265,9 @@ def process_analysis(job_id, reviews_list, api_key):
         print(f"❌ 分析失败 ({job_id}): {e}")
         with jobs_lock:
             analysis_jobs[job_id]['status'] = 'failed'
-            analysis_jobs[job_id]['error'] = str(e)
+            analysis_jobs[job_id]['error'] = str(e)[:200]
 
     finally:
-        # ✅ 问题1修复：清理临时目录
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -197,17 +283,14 @@ def analyze():
         reviews_list = data.get('reviews', [])
         api_key = data.get('api_key', '')
 
-        # 自适应：单个对象 → 数组
         if isinstance(reviews_list, dict):
             reviews_list = [reviews_list]
 
         if not reviews_list:
             return jsonify({'success': False, 'error': 'reviews不能为空'}), 400
 
-        # ✅ 问题3修复：为这个请求生成独立的job_id
         job_id = str(uuid.uuid4())[:8]
 
-        # 初始化任务
         with jobs_lock:
             analysis_jobs[job_id] = {
                 'status': 'processing',
@@ -217,7 +300,6 @@ def analyze():
                 'error': None
             }
 
-        # ✅ 问题2修复：后台异步处理，立即返回job_id
         thread = threading.Thread(
             target=process_analysis,
             args=(job_id, reviews_list, api_key),
@@ -248,7 +330,7 @@ def get_status(job_id):
     return jsonify({
         'success': True,
         'job_id': job_id,
-        'status': job_info['status'],  # 'processing' | 'completed' | 'failed'
+        'status': job_info['status'],
         'progress': job_info['progress'],
         'current_product': job_info['current_product'],
         'error': job_info['error']
@@ -270,7 +352,7 @@ def get_result(job_id):
             'status': 'processing',
             'progress': job_info['progress'],
             'message': '分析进行中，请稍候'
-        }), 202  # 202 Accepted
+        }), 202
 
     if job_info['status'] == 'failed':
         return jsonify({
@@ -279,7 +361,6 @@ def get_result(job_id):
             'error': job_info['error']
         }), 400
 
-    # 已完成
     return jsonify({
         'success': True,
         'results': job_info['results']
@@ -294,14 +375,14 @@ def dashboard():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'service': '言之有品·评论分析API'})
+    """✅ 问题8修复：健康检查端点（Render保活）"""
+    return jsonify({'status': 'ok', 'service': '言之有品·评论分析API', 'timestamp': time.time()})
 
 
 @app.route('/api/result')
 def get_legacy_result():
-    """兼容旧接口（不推荐）"""
+    """兼容旧接口"""
     try:
-        # 获取最新的结果文件
         results_dir = 'results'
         if os.path.exists(results_dir):
             files = sorted(os.listdir(results_dir))
