@@ -374,17 +374,23 @@ def health():
     })
 
 
-@app.route('/api/result')
-def get_legacy_result():
-    """兼容旧接口"""
+@app.route('/analyze/latest')
+def get_latest_result():
+    """✅ 获取最新的分析结果"""
     try:
         results_dir = 'results'
         if os.path.exists(results_dir):
             files = sorted(os.listdir(results_dir))
             if files:
-                with open(os.path.join(results_dir, files[-1]), 'r', encoding='utf-8') as f:
+                # 获取最新的结果文件
+                latest_file = files[-1]
+                with open(os.path.join(results_dir, latest_file), 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                return jsonify({'success': True, 'results': data})
+                return jsonify({
+                    'success': True,
+                    'results': data,
+                    'job_id': latest_file.replace('.json', '')
+                })
 
         return jsonify({
             'success': False,
@@ -394,6 +400,12 @@ def get_legacy_result():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/result')
+def get_legacy_result():
+    """兼容旧接口"""
+    return get_latest_result()
 
 
 if __name__ == '__main__':
