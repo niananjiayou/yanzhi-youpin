@@ -373,18 +373,52 @@ def health():
         'timestamp': time.time()
     })
 
+@app.route('/dashboard')
+def dashboard_with_jobid():
+    """✅ 根据 job_id 参数重定向或加载仪表板"""
+    job_id = request.args.get('job_id')
+    
+    if job_id:
+        # 检查任务是否存在
+        with jobs_lock:
+            if job_id in analysis_jobs:
+                print(f"📊 加载任务: {job_id}")
+                return send_from_directory('.', 'dashboard.html')
+            else:
+                # 任务不存在，尝试从 results 目录查找
+                result_file = f'results/{job_id}.json'
+                if os.path.exists(result_file):
+                    return send_from_directory('.', 'dashboard.html')
+        
+        # 任务未找到
+        return jsonify({'error': f'任务 {job_id} 不存在'}), 404
+    
+    # 没有 job_id，加载默认大屏
+    return send_from_directory('.', 'dashboard.html')
 
-@app.route('/api/result')
-def get_legacy_result():
-    """兼容旧接口"""
+
+@app.route('/')
+def home():
+    """主页 - 重定向到大屏"""
+    return send_from_directory('.', 'dashboard.html')
+
+@app.route('/analyze/latest')
+def get_latest_result():
+    """✅ 获取最新的分析结果"""
     try:
         results_dir = 'results'
         if os.path.exists(results_dir):
             files = sorted(os.listdir(results_dir))
             if files:
-                with open(os.path.join(results_dir, files[-1]), 'r', encoding='utf-8') as f:
+                # 获取最新的结果文件
+                latest_file = files[-1]
+                with open(os.path.join(results_dir, latest_file), 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                return jsonify({'success': True, 'results': data})
+                return jsonify({
+                    'success': True,
+                    'results': data,
+                    'job_id': latest_file.replace('.json', '')
+                })
 
         return jsonify({
             'success': False,
@@ -394,6 +428,12 @@ def get_legacy_result():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/result')
+def get_legacy_result():
+    """兼容旧接口"""
+    return get_latest_result()
 
 
 if __name__ == '__main__':
