@@ -48,41 +48,6 @@ def safe_keywords_to_string(keywords_dict):
     return str(keywords_dict)
 
 
-# ✅ 问题7修复：安全的Base64转换 + 自动删除文件
-def img_to_b64_safe(path, max_size_mb=5):
-    """安全的图片转Base64，避免内存溢出"""
-    if not os.path.exists(path):
-        return ''
-    
-    try:
-        file_size = os.path.getsize(path)
-        if file_size > max_size_mb * 1024 * 1024:
-            print(f"⚠️  文件过大: {file_size} bytes，跳过转换")
-            return ''
-        
-        # 分块读取避免一次性加载到内存
-        with open(path, 'rb') as f:
-            chunks = []
-            while True:
-                chunk = f.read(8192)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            
-            data = b''.join(chunks)
-            return base64.b64encode(data).decode('utf-8')
-    except Exception as e:
-        print(f"Base64转换失败: {e}")
-        return ''
-    finally:
-        # ✅ 转换后立即删除临时文件
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except:
-            pass
-
-
 # ✅ 问题9修复：API速率限制检查
 def rate_limit_check():
     """检查今日API调用是否超限"""
@@ -237,6 +202,16 @@ def process_analysis(job_id, reviews_list, api_key):
             good_kw_str = safe_keywords_to_string(good_kw)
             bad_kw_str = safe_keywords_to_string(bad_kw)
 
+            # ✅ 优化3修复：词云文件保存改为URL模式
+            os.makedirs('wordclouds', exist_ok=True)
+            good_wc_filename = f'good_{job_id}_{product_idx}.png'
+            bad_wc_filename = f'bad_{job_id}_{product_idx}.png'
+            
+            if os.path.exists(good_wc_path):
+                shutil.copy(good_wc_path, f'wordclouds/{good_wc_filename}')
+            if os.path.exists(bad_wc_path):
+                shutil.copy(bad_wc_path, f'wordclouds/{bad_wc_filename}')
+
             product_result = {
                 'product_name': product_name,
                 'category_name': category_name,
@@ -246,8 +221,8 @@ def process_analysis(job_id, reviews_list, api_key):
                 'good_keywords': good_kw_str,
                 'bad_keywords': bad_kw_str,
                 'suggestion': suggestion,
-                'good_wordcloud_base64': img_to_b64_safe(good_wc_path),
-                'bad_wordcloud_base64': img_to_b64_safe(bad_wc_path),
+                'good_wordcloud_url': f'/wordcloud/{good_wc_filename}',
+                'bad_wordcloud_url': f'/wordcloud/{bad_wc_filename}',
             }
             all_results.append(product_result)
 
@@ -367,16 +342,45 @@ def get_result(job_id):
     })
 
 
+# ✅ 优化3新增：词云文件服务（支持浏览器缓存）
+@app.route('/wordcloud/<filename>')
+def serve_wordcloud(filename):
+    """词云文件服务 - 支持浏览器缓存和安全检查"""
+    try:
+        # 安全检查：防止路径穿越攻击
+        if '..' in filename or '/' in filename or '\\' in filename:
+            return {'error': '非法路径'}, 403
+        
+        # 只允许PNG文件
+        if not filename.endswith('.png'):
+            return {'error': '仅支持PNG文件'}, 403
+        
+        response = send_from_directory('wordclouds', filename)
+        # ✅ 设置浏览器缓存7天（604800秒）
+        response.cache_control.max_age = 604800
+        response.cache_control.public = True
+        return response
+    except Exception as e:
+        print(f"词云文件服务异常: {e}")
+        return {'error': '文件不存在'}, 404
+
+
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
+    """✅ 大屏应用"""
     return send_from_directory('.', 'dashboard.html')
 
 
 @app.route('/health')
 def health():
-    """✅ 问题8修复：健康检查端点（Render保活）"""
-    return jsonify({'status': 'ok', 'service': '言之有品·评论分析API', 'timestamp': time.time()})
+    """✅ 健康检查端点（Render保活）"""
+    return jsonify({
+        'status': 'ok',
+        'service': '言之有品·评论分析API',
+        'api_calls_today': api_call_count,
+        'timestamp': time.time()
+    })
 
 
 @app.route('/api/result')
@@ -403,4 +407,6 @@ def get_legacy_result():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
+</parameter>
+</invoke>
