@@ -100,21 +100,6 @@
   .kw-good { background: #e6f9f2; color: #1a7a56; }
   .kw-bad  { background: #fff0f0; color: #c0392b; }
 
-  /* ── 维度分析条 ── */
-  .aspect-list { display: flex; flex-direction: column; gap: 12px; }
-  .aspect-item { display: flex; flex-direction: column; gap: 4px; }
-  .aspect-header { display: flex; justify-content: space-between; font-size: 13px; }
-  .aspect-name { font-weight: 600; }
-  .aspect-count { color: var(--sub); }
-  .aspect-bar-bg {
-    height: 10px; background: var(--bg); border-radius: 6px; overflow: hidden;
-  }
-  .aspect-bar-fill {
-    height: 100%; border-radius: 6px;
-    background: linear-gradient(90deg, #4f8ef7, #7c3aed);
-    transition: width .6s ease;
-  }
-
   /* ── 建议区域 ── */
   .suggestion-box {
     background: linear-gradient(135deg, #f0f4ff 0%, #faf0ff 100%);
@@ -171,6 +156,12 @@
     color: var(--sub); font-size: 12px;
     border-top: 1px solid var(--border);
   }
+
+  /* ── Debug 信息 ── */
+  .debug-info {
+    background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 16px; font-size: 12px; color: #856404;
+  }
 </style>
 </head>
 <body>
@@ -182,7 +173,7 @@
   </div>
   <div class="header-right">
     <div id="updateTime">加载中...</div>
-    <div style="margin-top:4px">数据来源：API接口</div>
+    <div style="margin-top:4px" id="dataSource">数据来源：检测中...</div>
   </div>
 </div>
 
@@ -202,42 +193,150 @@
 let allData   = [];
 let curIdx    = 0;
 let chartRefs = {};
+let dataSource = '未知';
 
 // ══════════════════════════════════════════════
-//  读取JSON 或 从 API 读取
+//  URL 参数读取
+// ══════════════════════════════════════════════
+function getQueryParams() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    results: params.get('results'),  // JSON格式的结果
+    job_id: params.get('job_id'),    // 异步任务ID
+    api_url: params.get('api_url'),  // API地址
+  };
+}
+
+// ══════════════════════════════════════════════
+//  读取数据（多个源）
 // ══════════════════════════════════════════════
 async function loadData() {
   try {
-    // ✅ 优先从API读取（新方式）
-    const apiRes = await fetch('./结构化分析结果.json');
-    if (apiRes.ok) {
-      allData = await apiRes.json();
-    } else {
-      throw new Error('API返回非200');
+    const urlParams = getQueryParams();
+    
+    // 优先级1：URL参数中直接传递了 results JSON
+    if (urlParams.results) {
+      console.log('✅ 从 URL 参数读取数据');
+      try {
+        allData = JSON.parse(decodeURIComponent(urlParams.results));
+        dataSource = '来自扣子 - URL参数';
+        init();
+        return;
+      } catch(e) {
+        console.error('URL参数JSON解析失败', e);
+      }
     }
+    
+    // 优先级2：通过 job_id 异步轮询获取结果
+    if (urlParams.job_id) {
+      console.log('✅ 通过 job_id 异步轮询');
+      dataSource = '来自扣子 - 异步轮询';
+      await pollJobResult(urlParams.job_id, urlParams.api_url);
+      return;
+    }
+    
+    // 优先级3：从本地 JSON 文件加载（测试用）
+    console.log('✅ 尝试读取本地 JSON 文件');
+    const res = await fetch('./结构化分析结果.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    allData = await res.json();
+    dataSource = '本地 JSON 文件';
     init();
+    
   } catch(e) {
-    document.getElementById('tabBar').innerHTML =
-      `<div class="empty">❌ 读取失败：${e.message}<br><br>
-       请通过 API 端点 /analyze 进行分析后查看结果<br>
-       或确认 <b>结构化分析结果.json</b> 存在</div>`;
+    showError(e.message);
   }
+}
+
+// ══════════════════════════════════════════════
+//  异步轮询获取结果
+// ══════════════════════════════════════════════
+async function pollJobResult(jobId, apiUrl) {
+  const baseUrl = apiUrl || 'https://yanzhi-youpin.onrender.com';
+  const maxRetries = 60;  // 最多轮询60次（10分钟）
+  let retries = 0;
+  
+  const poll = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/analyze/result/${jobId}`);
+      const data = await res.json();
+      
+      if (data.success && data.results) {
+        console.log('✅ 异步任务完成，获取结果', data.results);
+        allData = data.results;
+        init();
+        return true;
+      }
+      
+      if (data.status === 'processing') {
+        console.log(`⏳ 任务进行中... (${data.progress}%)`);
+        retries++;
+        if (retries < maxRetries) {
+          // 每2秒轮询一次
+          setTimeout(poll, 2000);
+        } else {
+          showError('任务超时，请稍后重试');
+        }
+        return false;
+      }
+      
+      if (data.status === 'failed') {
+        showError(`任务失败: ${data.error}`);
+        return false;
+      }
+      
+    } catch(e) {
+      console.error('轮询异常', e);
+      retries++;
+      if (retries < maxRetries) {
+        setTimeout(poll, 2000);
+      } else {
+        showError('网络连接异常');
+      }
+    }
+  };
+  
+  await poll();
+}
+
+// ══════════════════════════════════════════════
+//  错误提示
+// ══════════════════════════════════════════════
+function showError(message) {
+  document.getElementById('tabBar').innerHTML =
+    `<div class="empty">
+      <p>❌ ${message}</p>
+      <p style="margin-top:16px;font-size:12px;color:#aaa">
+        方式1：通过 API 端点 /analyze 进行分析后查看结果<br>
+        方式2：确认 <b>结构化分析结果.json</b> 存在<br>
+        方式3：使用 URL 参数直接传递数据<br>
+        例如：?results=${encodeURIComponent('[]')}
+      </p>
+    </div>`;
 }
 
 // ══════════════════════════════════════════════
 //  初始化 Tab
 // ══════════════════════════════════════════════
 function init() {
+  console.log('✅ 初始化大屏，数据条数:', allData.length);
+  
   document.getElementById('updateTime').textContent =
     '分析时间：' + new Date().toLocaleString('zh-CN');
+  document.getElementById('dataSource').textContent = `数据来源：${dataSource}`;
 
   const bar = document.getElementById('tabBar');
   bar.innerHTML = '';
 
+  if (!allData || allData.length === 0) {
+    showError('没有获取到分析数据');
+    return;
+  }
+
   allData.forEach((p, i) => {
     const btn = document.createElement('button');
     btn.className = 'tab-btn' + (i === 0 ? ' active' : '');
-    btn.textContent = p.product_name;
+    btn.textContent = p.product_name || '未知产品';
     btn.onclick = () => switchTab(i);
     bar.appendChild(btn);
   });
@@ -341,11 +440,9 @@ function renderProduct(idx) {
   // 渲染各区块
   renderCatChart(catDist);
   renderAspectChart(d.aspect_mention_count || {});
-  // ✅ 改动1：关键词现在是字符串，不是对象
   renderKeywords(d.good_keywords || '', 'goodKW', 'kw-good');
   renderKeywords(d.bad_keywords  || '', 'badKW',  'kw-bad');
   renderSuggestion(d.suggestion || '暂无建议');
-  // ✅ 改动2：传整个对象而不是product_name
   renderWordcloudImages(d);
 }
 
@@ -466,7 +563,6 @@ function renderAspectChart(aspectData) {
 }
 
 // ── 关键词气泡 ────────────────────────────────
-// ✅ 改动3：处理字符串格式的关键词
 function renderKeywords(kwStr, containerId, cls) {
   const container = document.getElementById(containerId);
   
@@ -475,7 +571,6 @@ function renderKeywords(kwStr, containerId, cls) {
     return;
   }
   
-  // ✅ 字符串格式：split('、') 而不是 Object.entries
   const keywords = kwStr.split('、')
     .map(w => w.trim())
     .filter(w => w.length > 0)
@@ -486,40 +581,52 @@ function renderKeywords(kwStr, containerId, cls) {
     return;
   }
   
-  // 所有关键词大小相同（因为已经是字符串了，没有权重）
   container.innerHTML = keywords.map(w => {
-    const size = 13 + Math.random() * 4;  // 13-17px 的随机大小
+    const size = 13 + Math.random() * 4;
     return `<span class="kw-tag ${cls}" style="font-size:${size}px">${w}</span>`;
   }).join('');
 }
 
 // ── 词云图片 ──────────────────────────────────
-// ✅ 改动4：使用Base64数据而不是本地文件
 function renderWordcloudImages(productData) {
   ['Good', 'Bad'].forEach(type => {
     const wrap = document.getElementById(`wc${type}Wrap`);
     
-    // ✅ 从对象中取 Base64 字符串
-    const base64Key = type === 'Good' ? 'good_wordcloud_base64' : 'bad_wordcloud_base64';
-    const base64Data = productData[base64Key];
+    // ✅ 优先使用 URL（新方式）
+    const urlKey = type === 'Good' ? 'good_wordcloud_url' : 'bad_wordcloud_url';
+    const url = productData[urlKey];
     
-    if (!base64Data) {
-      wrap.innerHTML = `<div class="no-img">🖼️ 词云图未生成</div>`;
+    if (url) {
+      const img = new Image();
+      img.src = url;
+      img.alt = type === 'Good' ? '好评词云' : '差评词云';
+      img.style.cssText = 'max-width:100%;border-radius:10px;border:1px solid #e2e8f0';
+      img.onerror = () => {
+        wrap.innerHTML = `<div class="no-img">🖼️ 词云图加载失败<br><small>${url}</small></div>`;
+      };
+      wrap.innerHTML = '';
+      wrap.appendChild(img);
       return;
     }
     
-    const img = new Image();
-    // ✅ 使用 data URI 而不是本地文件路径
-    img.src = `data:image/png;base64,${base64Data}`;
-    img.alt = type === 'Good' ? '好评词云' : '差评词云';
-    img.style.cssText = 'max-width:100%;border-radius:10px;border:1px solid #e2e8f0';
+    // 降级：尝试 Base64 (兼容旧版)
+    const base64Key = type === 'Good' ? 'good_wordcloud_base64' : 'bad_wordcloud_base64';
+    const base64Data = productData[base64Key];
     
-    img.onerror = () => {
-      wrap.innerHTML = `<div class="no-img">🖼️ 词云图加载失败</div>`;
-    };
+    if (base64Data) {
+      const img = new Image();
+      img.src = `data:image/png;base64,${base64Data}`;
+      img.alt = type === 'Good' ? '好评词云' : '差评词云';
+      img.style.cssText = 'max-width:100%;border-radius:10px;border:1px solid #e2e8f0';
+      img.onerror = () => {
+        wrap.innerHTML = `<div class="no-img">🖼️ Base64图片加载失败</div>`;
+      };
+      wrap.innerHTML = '';
+      wrap.appendChild(img);
+      return;
+    }
     
-    wrap.innerHTML = '';
-    wrap.appendChild(img);
+    wrap.innerHTML = `<div class="no-img">🖼️ 词云图未生成</div>`;
   });
 }
 
