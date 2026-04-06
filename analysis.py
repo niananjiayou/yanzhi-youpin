@@ -12,6 +12,24 @@ import matplotlib.font_manager as fm
 import numpy as np
 from PIL import Image
 
+
+
+def safe_keywords_to_string(keywords_dict):
+    """
+    安全地将任意类型的关键词转换为中文逗号分隔的字符串
+    """
+    if not keywords_dict:
+        return ""
+    
+    if isinstance(keywords_dict, dict):
+        return "、".join(str(k) for k in keywords_dict.keys())
+    
+    if isinstance(keywords_dict, (list, tuple)):
+        return "、".join(str(k) for k in keywords_dict)
+    
+    return str(keywords_dict) if keywords_dict else ""
+
+
 # ══════════════════════════════════════════════════════════════════
 #  言之有"品" · AI评论分析流水线 v4.1
 #  完全通用版：支持任意商品品类，无硬编码品类词
