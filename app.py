@@ -1,3 +1,4 @@
+
 from flask import Flask, request, jsonify, send_from_directory
 import json, os, re, time, io, base64
 import pandas as pd
@@ -14,42 +15,22 @@ from analysis import (
     MAX_WORKERS, OUTPUT_DIR, MERGED_JSON_PATH
 )
 
-# ✅ 【新增】安全转换关键词函数 ──────────────────────────
-def safe_keywords_to_string(keywords_dict):
-    """
-    安全地将任意类型的关键词转换为中文逗号分隔的字符串
-    
-    处理情况：
-    - dict: {"词": 权重} → "词1、词2、词3"
-    - list/tuple: ["词1", "词2"] → "词1、词2、词3"
-    - None/空值: → ""
-    - 其他类型: → str(value)
-    """
-    if not keywords_dict:
-        return ""
-    
-    if isinstance(keywords_dict, dict):
-        # 字典：取所有 key（value是权重）
-        return "、".join(str(k) for k in keywords_dict.keys())
-    
-    if isinstance(keywords_dict, (list, tuple)):
-        # 列表或元组：直接连接
-        return "、".join(str(k) for k in keywords_dict)
-    
-    # 其他类型：强制转换
-    return str(keywords_dict) if keywords_dict else ""
-
-
 app = Flask(__name__, static_folder='.', static_url_path='')
 
 # ── 接口1：分析评论（核心接口）─────────────────────────
 @app.route('/analyze', methods=['POST'])
 def analyze():
+    """
+    支持三种输入方式：
+    1. 上传文件（CSV/Excel/JSON）
+    2. 粘贴 JSON 数组
+    3. 粘贴 JSON 对象
+    """
     try:
         reviews_list = []
         api_key = ''
         
-        # ✅ 方式1：文件上传
+        # ✅ 方式1：文件上传（Content-Type: multipart/form-data）
         if 'file' in request.files:
             file = request.files['file']
             if file.filename == '':
@@ -87,15 +68,20 @@ def analyze():
                         'error': f'❌ 不支持的文件类型：{file_ext}，支持：json、csv、xlsx、xls'
                     }), 400
                 
+                print(f"✅ 文件解析成功：{file.filename}，共 {len(reviews_list)} 条数据")
+                
             except Exception as e:
                 return jsonify({'success': False, 'error': f'❌ 文件解析失败：{str(e)}'}), 400
         
-        # ✅ 方式2：粘贴 JSON 数据
+        # ✅ 方式2 & 3：粘贴 JSON 数据（Content-Type: application/json）
         elif request.json:
             data = request.json
             api_key = data.get('api_key', '')
+            
+            # 兼容 'reviews' 和 'review' 两个参数名
             reviews_list = data.get('reviews') or data.get('review', [])
             
+            # 如果是单个对象，转成数组
             if isinstance(reviews_list, dict):
                 reviews_list = [reviews_list]
         
@@ -106,7 +92,7 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
-        # 确保是列表
+        # 数据验证
         if not isinstance(reviews_list, list):
             return jsonify({'success': False, 'error': '❌ 数据必须是数组或对象'}), 400
 
@@ -133,6 +119,7 @@ def analyze():
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         all_results = []
 
+        # ── 核心分析流程 ────────────────────────────────────
         for product_name, pdf in df.groupby(COL_PRODUCT):
             safe_name = re.sub(r'[\\/*?:"<>|]', '_', str(product_name)).strip()
             folder    = os.path.join(OUTPUT_DIR, safe_name)
@@ -144,8 +131,9 @@ def analyze():
             work_df['hard_label'] = work_df.apply(hard_filter, axis=1)
             hard_in = work_df[work_df['hard_label'] == '通过'].copy()
 
-            # 如果全部被过滤掉
+            # 如果全部被过滤掉，跳过
             if len(hard_in) == 0:
+                print(f"⚠️  【{product_name}】所有评论都被过滤，跳过")
                 continue
 
             # [2] 品类识别
@@ -153,7 +141,7 @@ def analyze():
             ai_category_name, dynamic_aspects = ai_detect_category_and_aspects(sample_reviews)
             category_name = ai_category_name if ai_category_name else product_name
 
-            # [3] AI软分类（并发）
+            # [3] AI 软分类（并发处理）
             if not os.getenv('ZHIPUAI_API_KEY'):
                 hard_in['ai_category'] = 'AI未开启'
             else:
@@ -173,6 +161,7 @@ def analyze():
             work_df['ai_category'] = work_df['hard_label']
             work_df.loc[hard_in.index, 'ai_category'] = hard_in['ai_category']
 
+            # 统计分类
             cat_counts = work_df['ai_category'].value_counts().to_dict()
             good_df    = work_df[work_df['ai_category'] == '有效好评']
             bad_df     = work_df[work_df['ai_category'] == '有效差评']
@@ -191,7 +180,7 @@ def analyze():
                 ' '.join(bad_df[COL_CONTENT].tolist()) if len(bad_df) > 0 else '', 
                 '差评', category_name)
 
-            # ✅ 类型检查和转换
+            # 类型检查和转换
             if not isinstance(good_kw, dict):
                 good_kw = {}
             if not isinstance(bad_kw, dict):
@@ -206,7 +195,7 @@ def analyze():
             generate_wordcloud(good_kw, good_wc_path, 'Blues')
             generate_wordcloud(bad_kw,  bad_wc_path,  'YlOrRd')
             
-            # Base64转换函数
+            # Base64 转换
             def img_to_b64(path):
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
@@ -237,38 +226,46 @@ def analyze():
             }
             all_results.append(product_result)
 
-        # 写入json文件
+        # 写入 JSON 结果文件
         with open(MERGED_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
 
         return jsonify({
             'success': True, 
             'count': len(all_results),
+            'message': f'✅ 成功分析 {len(all_results)} 个商品',
             'results': all_results
         })
 
     except Exception as e:
         import traceback
+        print(f"❌ 错误：{str(e)}")
+        print(traceback.format_exc())
         return jsonify({
             'success': False, 
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
 
-# ── 接口2：直接访问dashboard大屏 ──────────────────────
+
+# ── 接口2：访问 Dashboard 大屏 ──────────────────────────
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
     return send_from_directory('.', 'dashboard.html')
 
 
-# ── 接口3：健康检查 ────────────────────────────────────
+# ── 接口3：健康检查 ──────────────────────────────────────
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'service': '言之有品·评论分析API'})
+    return jsonify({
+        'status': 'ok', 
+        'service': '言之有品·评论分析API',
+        'version': '1.0'
+    })
 
 
-# ── 接口4：dashboard读取分析结果 ──────────────────────
+# ── 接口4：Dashboard 读取分析结果 ──────────────────────
 @app.route('/api/result')
 def get_result():
     try:
@@ -283,6 +280,8 @@ def get_result():
         }), 200
 
 
+# ── 启动应用 ──────────────────────────────────────────
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    print(f"🚀 服务启动在 http://0.0.0.0:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
