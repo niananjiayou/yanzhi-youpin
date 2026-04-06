@@ -46,9 +46,11 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
-        data         = request.json
-        reviews_list = data.get('reviews', [])
-        api_key      = data.get('api_key', '')
+        data = request.json
+        
+        # ✅ 改这里：兼容 'reviews' 和 'review' 两个参数名
+        reviews_list = data.get('reviews') or data.get('review', [])
+        api_key = data.get('api_key', '')
 
         # 注入API Key
         if api_key:
@@ -57,6 +59,13 @@ def analyze():
         # ✅ 核心修复：兼容单个对象 和 对象数组 两种情况
         if isinstance(reviews_list, dict):
             reviews_list = [reviews_list]
+
+        # 确保是列表
+        if not isinstance(reviews_list, list):
+            return jsonify({'success': False, 'error': 'reviews 必须是数组或对象'}), 400
+
+        if not reviews_list:
+            return jsonify({'success': False, 'error': 'reviews 不能为空'}), 400
 
         # ✅ 转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
@@ -88,6 +97,11 @@ def analyze():
             # [1] 硬过滤
             work_df['hard_label'] = work_df.apply(hard_filter, axis=1)
             hard_in = work_df[work_df['hard_label'] == '通过'].copy()
+
+            # 如果全部被过滤掉
+            if len(hard_in) == 0:
+                print(f"⚠️  【{product_name}】所有评论都被硬过滤，跳过分析")
+                continue
 
             # [2] 品类识别
             sample_reviews = hard_in[COL_CONTENT].tolist()[:15]
@@ -126,11 +140,13 @@ def analyze():
 
             # [5] 关键词提取
             good_kw = ai_extract_keywords(
-                ' '.join(good_df[COL_CONTENT].tolist()), '好评', category_name)
+                ' '.join(good_df[COL_CONTENT].tolist()) if len(good_df) > 0 else '', 
+                '好评', category_name)
             bad_kw  = ai_extract_keywords(
-                ' '.join(bad_df[COL_CONTENT].tolist()),  '差评', category_name)
+                ' '.join(bad_df[COL_CONTENT].tolist()) if len(bad_df) > 0 else '', 
+                '差评', category_name)
 
-            # ✅ 类型检查和转换（修复关键词格式问题）
+            # ✅ 类型检查和转换
             if not isinstance(good_kw, dict):
                 good_kw = {}
             if not isinstance(bad_kw, dict):
@@ -180,10 +196,19 @@ def analyze():
         with open(MERGED_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-        return jsonify({'success': True, 'results': all_results})
+        return jsonify({
+            'success': True, 
+            'count': len(all_results),
+            'results': all_results
+        })
 
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import traceback
+        return jsonify({
+            'success': False, 
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 
 # ── 接口2：直接访问dashboard大屏 ──────────────────────
