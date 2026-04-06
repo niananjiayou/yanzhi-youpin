@@ -48,7 +48,7 @@ def analyze():
                 
                 # 解析 CSV 内容
                 print("⏳ 正在解析 CSV...")
-                df = pd.read_csv(io.StringIO(response.text))
+                df = pd.read_csv(io.StringIO(response.text), encoding='utf-8-sig')
                 print(f"✅ 解析成功，列名: {list(df.columns)}")
                 print(f"✅ 共 {len(df)} 行数据")
                 
