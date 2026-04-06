@@ -1,8 +1,8 @@
-
 from flask import Flask, request, jsonify, send_from_directory
 import json, os, re, time, io, base64
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests as req  # ✅ 新增
 
 # ── 直接从你的 analysis.py 导入所有函数 ──────────────
 from analysis import (
@@ -20,86 +20,85 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 # ── 接口1：分析评论（核心接口）─────────────────────────
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    """
-    支持三种输入方式：
-    1. 上传文件（CSV/Excel/JSON）
-    2. 粘贴 JSON 数组
-    3. 粘贴 JSON 对象
-    """
     try:
+        data = request.json
         reviews_list = []
         api_key = ''
         
-        # ✅ 方式1：文件上传（Content-Type: multipart/form-data）
-        if 'file' in request.files:
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'success': False, 'error': '❌ 文件名为空'}), 400
+        print("=" * 50)
+        print("📥 接收到请求")
+        print(f"Request data keys: {list(data.keys())}")
+        print(f"reviews: {data.get('reviews')}")
+        print(f"review_file: {data.get('review_file')}")
+        
+        # ✅ 【新增】处理扣子传来的文件 URL
+        if data.get('review_file') and (not data.get('reviews') or data.get('reviews') == []):
+            file_url = data.get('review_file')
             
-            file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+            print(f"\n📂 检测到文件 URL，开始下载...")
+            print(f"URL: {file_url[:80]}...")
             
             try:
-                if file_ext == 'json':
-                    # JSON 文件
-                    content = file.read().decode('utf-8')
-                    data = json.loads(content)
-                    if isinstance(data, list):
-                        reviews_list = data
-                    elif isinstance(data, dict) and 'reviews' in data:
-                        reviews_list = data['reviews']
-                        if isinstance(reviews_list, dict):
-                            reviews_list = [reviews_list]
-                    else:
-                        return jsonify({'success': False, 'error': '❌ JSON 格式错误'}), 400
+                # 下载 CSV 文件
+                print("⏳ 正在下载文件...")
+                response = req.get(file_url, timeout=30)
+                response.raise_for_status()
                 
-                elif file_ext == 'csv':
-                    # CSV 文件
-                    df = pd.read_csv(io.BytesIO(file.read()))
-                    reviews_list = df.to_dict('records')
+                print(f"✅ 下载成功，文件大小: {len(response.text)} 字节")
                 
-                elif file_ext in ['xlsx', 'xls']:
-                    # Excel 文件
-                    df = pd.read_excel(io.BytesIO(file.read()))
-                    reviews_list = df.to_dict('records')
+                # 解析 CSV 内容
+                print("⏳ 正在解析 CSV...")
+                df = pd.read_csv(io.StringIO(response.text))
+                print(f"✅ 解析成功，列名: {list(df.columns)}")
+                print(f"✅ 共 {len(df)} 行数据")
                 
-                else:
-                    return jsonify({
-                        'success': False, 
-                        'error': f'❌ 不支持的文件类型：{file_ext}，支持：json、csv、xlsx、xls'
-                    }), 400
+                reviews_list = df.to_dict('records')
+                print(f"✅ 转换为列表成功，共 {len(reviews_list)} 条")
                 
-                print(f"✅ 文件解析成功：{file.filename}，共 {len(reviews_list)} 条数据")
+                # 打印第一条数据用于调试
+                if reviews_list:
+                    print(f"📌 第一条数据: {reviews_list[0]}")
                 
             except Exception as e:
-                return jsonify({'success': False, 'error': f'❌ 文件解析失败：{str(e)}'}), 400
+                print(f"\n❌ 错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({
+                    'success': False,
+                    'error': f'❌ 解析文件 URL 失败：{str(e)}'
+                }), 400
         
-        # ✅ 方式2 & 3：粘贴 JSON 数据（Content-Type: application/json）
-        elif request.json:
-            data = request.json
-            api_key = data.get('api_key', '')
-            
-            # 兼容 'reviews' 和 'review' 两个参数名
-            reviews_list = data.get('reviews') or data.get('review', [])
-            
-            # 如果是单个对象，转成数组
-            if isinstance(reviews_list, dict):
-                reviews_list = [reviews_list]
-        
+        # ✅ 原有的逻辑：兼容 'reviews' 和 'review' 两个参数名
         else:
-            return jsonify({'success': False, 'error': '❌ 请提供 reviews 数组或上传文件'}), 400
+            print("\n📝 使用粘贴的 JSON 数据")
+            reviews_list = data.get('reviews') or data.get('review', [])
+            api_key = data.get('api_key', '')
         
         # 注入 API Key
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
+            print(f"✅ 已注入 API Key")
 
-        # 数据验证
+        # ✅ 核心修复：兼容单个对象 和 对象数组 两种情况
+        if isinstance(reviews_list, dict):
+            reviews_list = [reviews_list]
+
+        # 确保是列表
         if not isinstance(reviews_list, list):
-            return jsonify({'success': False, 'error': '❌ 数据必须是数组或对象'}), 400
+            print(f"❌ reviews_list 不是列表，类型: {type(reviews_list)}")
+            return jsonify({'success': False, 'error': '❌ reviews 必须是数组或对象'}), 400
 
+        print(f"\n📊 数据检查")
+        print(f"reviews_list 类型: {type(reviews_list)}")
+        print(f"reviews_list 长度: {len(reviews_list)}")
+        
         if not reviews_list:
+            print("❌ reviews_list 为空!")
             return jsonify({'success': False, 'error': '❌ 数据不能为空'}), 400
 
-        # ✅ 转 DataFrame，并自动补全缺失字段
+        print(f"✅ 数据验证通过，开始分析...")
+
+        # ✅ 转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
 
         # 如果传入的是纯字符串列表，自动把唯一列设为 content
@@ -119,7 +118,6 @@ def analyze():
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         all_results = []
 
-        # ── 核心分析流程 ────────────────────────────────────
         for product_name, pdf in df.groupby(COL_PRODUCT):
             safe_name = re.sub(r'[\\/*?:"<>|]', '_', str(product_name)).strip()
             folder    = os.path.join(OUTPUT_DIR, safe_name)
@@ -131,9 +129,9 @@ def analyze():
             work_df['hard_label'] = work_df.apply(hard_filter, axis=1)
             hard_in = work_df[work_df['hard_label'] == '通过'].copy()
 
-            # 如果全部被过滤掉，跳过
+            # 如果全部被过滤掉
             if len(hard_in) == 0:
-                print(f"⚠️  【{product_name}】所有评论都被过滤，跳过")
+                print(f"⚠️  【{product_name}】所有评论都被硬过滤，跳过分析")
                 continue
 
             # [2] 品类识别
@@ -141,7 +139,7 @@ def analyze():
             ai_category_name, dynamic_aspects = ai_detect_category_and_aspects(sample_reviews)
             category_name = ai_category_name if ai_category_name else product_name
 
-            # [3] AI 软分类（并发处理）
+            # [3] AI软分类（并发）
             if not os.getenv('ZHIPUAI_API_KEY'):
                 hard_in['ai_category'] = 'AI未开启'
             else:
@@ -161,7 +159,6 @@ def analyze():
             work_df['ai_category'] = work_df['hard_label']
             work_df.loc[hard_in.index, 'ai_category'] = hard_in['ai_category']
 
-            # 统计分类
             cat_counts = work_df['ai_category'].value_counts().to_dict()
             good_df    = work_df[work_df['ai_category'] == '有效好评']
             bad_df     = work_df[work_df['ai_category'] == '有效差评']
@@ -180,7 +177,7 @@ def analyze():
                 ' '.join(bad_df[COL_CONTENT].tolist()) if len(bad_df) > 0 else '', 
                 '差评', category_name)
 
-            # 类型检查和转换
+            # ✅ 类型检查和转换
             if not isinstance(good_kw, dict):
                 good_kw = {}
             if not isinstance(bad_kw, dict):
@@ -195,7 +192,7 @@ def analyze():
             generate_wordcloud(good_kw, good_wc_path, 'Blues')
             generate_wordcloud(bad_kw,  bad_wc_path,  'YlOrRd')
             
-            # Base64 转换
+            # Base64转换函数
             def img_to_b64(path):
                 if os.path.exists(path):
                     with open(path, 'rb') as f:
@@ -226,46 +223,46 @@ def analyze():
             }
             all_results.append(product_result)
 
-        # 写入 JSON 结果文件
+        # 写入json文件
         with open(MERGED_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
+
+        print(f"\n✅ 分析完成！共处理 {len(all_results)} 个商品")
+        print("=" * 50)
 
         return jsonify({
             'success': True, 
             'count': len(all_results),
-            'message': f'✅ 成功分析 {len(all_results)} 个商品',
             'results': all_results
         })
 
     except Exception as e:
         import traceback
-        print(f"❌ 错误：{str(e)}")
-        print(traceback.format_exc())
+        error_msg = traceback.format_exc()
+        print(f"\n❌ 发生异常：\n{error_msg}")
+        print("=" * 50)
+        
         return jsonify({
             'success': False, 
             'error': str(e),
-            'traceback': traceback.format_exc()
+            'traceback': error_msg
         }), 500
 
 
-# ── 接口2：访问 Dashboard 大屏 ──────────────────────────
+# ── 接口2：直接访问dashboard大屏 ──────────────────────
 @app.route('/')
 @app.route('/dashboard')
 def dashboard():
     return send_from_directory('.', 'dashboard.html')
 
 
-# ── 接口3：健康检查 ──────────────────────────────────────
+# ── 接口3：健康检查 ────────────────────────────────────
 @app.route('/health')
 def health():
-    return jsonify({
-        'status': 'ok', 
-        'service': '言之有品·评论分析API',
-        'version': '1.0'
-    })
+    return jsonify({'status': 'ok', 'service': '言之有品·评论分析API'})
 
 
-# ── 接口4：Dashboard 读取分析结果 ──────────────────────
+# ── 接口4：dashboard读取分析结果 ──────────────────────
 @app.route('/api/result')
 def get_result():
     try:
@@ -280,8 +277,6 @@ def get_result():
         }), 200
 
 
-# ── 启动应用 ──────────────────────────────────────────
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"🚀 服务启动在 http://0.0.0.0:{port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
