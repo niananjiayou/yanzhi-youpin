@@ -1,9 +1,3 @@
-假如你是计算机大佬并且熟练使用扣子。我现在在扣子上建了一个插件，是输入评论然后对评论进行分析，最终生成可视化大屏。这个是通过GitHub上建了一个仓库，然后在Render上进行部署，最终以post请求建立了插件。
-
-app.py文件如下
-# app.py - 把你的 analysis.py 包装成Web接口
-# 你的 analysis.py 一行不用改
-
 from flask import Flask, request, jsonify, send_from_directory
 import json, os, re, time, io, base64
 import pandas as pd
