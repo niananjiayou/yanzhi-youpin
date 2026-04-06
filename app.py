@@ -46,28 +46,74 @@ app = Flask(__name__, static_folder='.', static_url_path='')
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
-        data = request.json
+        reviews_list = []
+        api_key = ''
         
-        # ✅ 改这里：兼容 'reviews' 和 'review' 两个参数名
-        reviews_list = data.get('reviews') or data.get('review', [])
-        api_key = data.get('api_key', '')
-
-        # 注入API Key
+        # ✅ 方式1：文件上传
+        if 'file' in request.files:
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'success': False, 'error': '❌ 文件名为空'}), 400
+            
+            file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else ''
+            
+            try:
+                if file_ext == 'json':
+                    # JSON 文件
+                    content = file.read().decode('utf-8')
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        reviews_list = data
+                    elif isinstance(data, dict) and 'reviews' in data:
+                        reviews_list = data['reviews']
+                        if isinstance(reviews_list, dict):
+                            reviews_list = [reviews_list]
+                    else:
+                        return jsonify({'success': False, 'error': '❌ JSON 格式错误'}), 400
+                
+                elif file_ext == 'csv':
+                    # CSV 文件
+                    df = pd.read_csv(io.BytesIO(file.read()))
+                    reviews_list = df.to_dict('records')
+                
+                elif file_ext in ['xlsx', 'xls']:
+                    # Excel 文件
+                    df = pd.read_excel(io.BytesIO(file.read()))
+                    reviews_list = df.to_dict('records')
+                
+                else:
+                    return jsonify({
+                        'success': False, 
+                        'error': f'❌ 不支持的文件类型：{file_ext}，支持：json、csv、xlsx、xls'
+                    }), 400
+                
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'❌ 文件解析失败：{str(e)}'}), 400
+        
+        # ✅ 方式2：粘贴 JSON 数据
+        elif request.json:
+            data = request.json
+            api_key = data.get('api_key', '')
+            reviews_list = data.get('reviews') or data.get('review', [])
+            
+            if isinstance(reviews_list, dict):
+                reviews_list = [reviews_list]
+        
+        else:
+            return jsonify({'success': False, 'error': '❌ 请提供 reviews 数组或上传文件'}), 400
+        
+        # 注入 API Key
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
 
-        # ✅ 核心修复：兼容单个对象 和 对象数组 两种情况
-        if isinstance(reviews_list, dict):
-            reviews_list = [reviews_list]
-
         # 确保是列表
         if not isinstance(reviews_list, list):
-            return jsonify({'success': False, 'error': 'reviews 必须是数组或对象'}), 400
+            return jsonify({'success': False, 'error': '❌ 数据必须是数组或对象'}), 400
 
         if not reviews_list:
-            return jsonify({'success': False, 'error': 'reviews 不能为空'}), 400
+            return jsonify({'success': False, 'error': '❌ 数据不能为空'}), 400
 
-        # ✅ 转DataFrame，并自动补全缺失字段
+        # ✅ 转 DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
 
         # 如果传入的是纯字符串列表，自动把唯一列设为 content
@@ -100,7 +146,6 @@ def analyze():
 
             # 如果全部被过滤掉
             if len(hard_in) == 0:
-                print(f"⚠️  【{product_name}】所有评论都被硬过滤，跳过分析")
                 continue
 
             # [2] 品类识别
@@ -209,7 +254,6 @@ def analyze():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
-
 
 # ── 接口2：直接访问dashboard大屏 ──────────────────────
 @app.route('/')
