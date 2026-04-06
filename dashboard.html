@@ -459,18 +459,36 @@ function renderAspectChart(aspectData) {
   });
 }
 // ── 关键词气泡 ────────────────────────────────
-function renderKeywords(kwObj, containerId, cls) {
+// ✅ 新代码（支持字符串格式）：
+function renderKeywords(kwData, containerId, cls) {
   const container = document.getElementById(containerId);
-  if (!kwObj || Object.keys(kwObj).length === 0) {
-    container.innerHTML = '<span style="color:#aaa;font-size:13px">暂无关键词</span>';
+  
+  // ✅ 如果是字符串格式（"词1、词2、词3"），直接分割显示
+  if (typeof kwData === 'string' && kwData.trim()) {
+    const keywords = kwData.split('、').filter(k => k.trim());
+    if (keywords.length === 0) {
+      container.innerHTML = '<span style="color:#aaa;font-size:13px">暂无关键词</span>';
+      return;
+    }
+    container.innerHTML = keywords.map(w => {
+      return `<span class="kw-tag ${cls}">${w.trim()}</span>`;
+    }).join('');
     return;
   }
-  const sorted = Object.entries(kwObj).sort((a,b) => b[1]-a[1]).slice(0, 25);
-  const max = sorted[0][1] || 1;
-  container.innerHTML = sorted.map(([w, s]) => {
-    const size = 12 + Math.round((s / max) * 8);
-    return `<span class="kw-tag ${cls}" style="font-size:${size}px">${w}</span>`;
-  }).join('');
+  
+  // 如果是对象格式（兼容旧版本），按权重排序
+  if (typeof kwData === 'object' && kwData && Object.keys(kwData).length > 0) {
+    const sorted = Object.entries(kwData).sort((a,b) => b[1]-a[1]).slice(0, 25);
+    const max = sorted[0][1] || 1;
+    container.innerHTML = sorted.map(([w, s]) => {
+      const size = 12 + Math.round((s / max) * 8);
+      return `<span class="kw-tag ${cls}" style="font-size:${size}px">${w}</span>`;
+    }).join('');
+    return;
+  }
+  
+  // 都不是，显示"暂无"
+  container.innerHTML = '<span style="color:#aaa;font-size:13px">暂无关键词</span>';
 }
 
 // ── 词云图片 ──────────────────────────────────
