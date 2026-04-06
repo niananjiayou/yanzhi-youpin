@@ -28,34 +28,43 @@ def analyze():
         print("=" * 50)
         print("📥 接收到请求")
         print(f"Request data keys: {list(data.keys())}")
-        print(f"reviews: {data.get('reviews')}")
-        print(f"review_file: {data.get('review_file')}")
         
-        # ✅ 【新增】处理扣子传来的文件 URL
+        # ============ 【方式1】URL下载 ============
         if data.get('review_file') and (not data.get('reviews') or data.get('reviews') == []):
             file_url = data.get('review_file')
-            
-            print(f"\n📂 检测到文件 URL，开始下载...")
+            print(f"\n📂 【方式1】检测到文件 URL，开始下载...")
             print(f"URL: {file_url[:80]}...")
             
             try:
-                # 下载 CSV 文件
                 print("⏳ 正在下载文件...")
                 response = req.get(file_url, timeout=30)
                 response.raise_for_status()
+                print(f"✅ 下载成功，大小: {len(response.text)} 字节")
                 
-                print(f"✅ 下载成功，文件大小: {len(response.text)} 字节")
-                
-                # 解析 CSV 内容
                 print("⏳ 正在解析 CSV...")
                 df = pd.read_csv(io.StringIO(response.text), encoding='utf-8-sig')
-                print(f"✅ 解析成功，列名: {list(df.columns)}")
-                print(f"✅ 共 {len(df)} 行数据")
-                
+                print(f"✅ 解析成功，列数: {len(df.columns)}")
                 reviews_list = df.to_dict('records')
-                print(f"✅ 转换为列表成功，共 {len(reviews_list)} 条")
+                print(f"✅ 转换成功，共 {len(reviews_list)} 条")
                 
-                # 打印第一条数据用于调试
+            except Exception as e:
+                print(f"\n❌ 错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'error': f'❌ 文件下载失败：{str(e)}'}), 400
+        
+        # ============ 【方式2】纯文本CSV内容 ============
+        elif data.get('csv_text') and (not data.get('reviews') or data.get('reviews') == []):
+            csv_content = data.get('csv_text')
+            print(f"\n📝 【方式2】检测到纯文本 CSV，共 {len(csv_content)} 字符")
+            
+            try:
+                print("⏳ 正在解析 CSV...")
+                df = pd.read_csv(io.StringIO(csv_content), encoding='utf-8-sig')
+                print(f"✅ 解析成功，列数: {len(df.columns)}")
+                reviews_list = df.to_dict('records')
+                print(f"✅ 转换成功，共 {len(reviews_list)} 条")
+                
                 if reviews_list:
                     print(f"📌 第一条数据: {reviews_list[0]}")
                 
@@ -63,14 +72,11 @@ def analyze():
                 print(f"\n❌ 错误: {str(e)}")
                 import traceback
                 traceback.print_exc()
-                return jsonify({
-                    'success': False,
-                    'error': f'❌ 解析文件 URL 失败：{str(e)}'
-                }), 400
+                return jsonify({'success': False, 'error': f'❌ CSV解析失败：{str(e)}'}), 400
         
-        # ✅ 原有的逻辑：兼容 'reviews' 和 'review' 两个参数名
+        # ============ 【方式3】数组方式 ============
         else:
-            print("\n📝 使用粘贴的 JSON 数据")
+            print("\n📊 【方式3】使用 JSON 数组数据")
             reviews_list = data.get('reviews') or data.get('review', [])
             api_key = data.get('api_key', '')
         
@@ -78,25 +84,20 @@ def analyze():
         if api_key:
             os.environ['ZHIPUAI_API_KEY'] = api_key
             print(f"✅ 已注入 API Key")
-
-        # ✅ 核心修复：兼容单个对象 和 对象数组 两种情况
+        
+        # 兼容单个对象
         if isinstance(reviews_list, dict):
             reviews_list = [reviews_list]
-
-        # 确保是列表
+        
         if not isinstance(reviews_list, list):
             print(f"❌ reviews_list 不是列表，类型: {type(reviews_list)}")
-            return jsonify({'success': False, 'error': '❌ reviews 必须是数组或对象'}), 400
-
-        print(f"\n📊 数据检查")
-        print(f"reviews_list 类型: {type(reviews_list)}")
-        print(f"reviews_list 长度: {len(reviews_list)}")
+            return jsonify({'success': False, 'error': '❌ 数据格式错误'}), 400
         
         if not reviews_list:
-            print("❌ reviews_list 为空!")
+            print("❌ 数据为空!")
             return jsonify({'success': False, 'error': '❌ 数据不能为空'}), 400
-
-        print(f"✅ 数据验证通过，开始分析...")
+        
+        print(f"\n✅ 数据验证通过，共 {len(reviews_list)} 条，开始分析...")
 
         # ✅ 转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
