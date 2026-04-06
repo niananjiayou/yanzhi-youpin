@@ -100,6 +100,13 @@ def analyze():
 
         # ✅ 转DataFrame，并自动补全缺失字段
         df = pd.DataFrame(reviews_list)
+        # ✅ 转 DataFrame，并自动补全缺失字段
+        df = pd.DataFrame(reviews_list)
+
+        # ✅ 【新增】标准化商品名称（去掉前后空格和多余空格）  
+        if COL_PRODUCT in df.columns:
+            df[COL_PRODUCT] = df[COL_PRODUCT].str.strip()  # 去掉前后空格
+            df[COL_PRODUCT] = df[COL_PRODUCT].str.replace(r'\s+', ' ', regex=True)  # 多余空格变单个
 
         # 如果传入的是纯字符串列表，自动把唯一列设为 content
         if COL_CONTENT not in df.columns and len(df.columns) == 1:
