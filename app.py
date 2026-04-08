@@ -37,16 +37,73 @@ def analyze():
             
             try:
                 print("⏳ 正在下载文件...")
-                response = req.get(file_url, timeout=30)
+                
+                # 🔧 通用请求头（对两种 URL 都适用）
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://www.byteimg.com/',
+                    'Accept': 'text/csv, text/plain, application/octet-stream, */*'
+                }
+                
+                # 检测 URL 来源（工作流 URL 可能需要更长的超时时间）
+                is_workflow_url = 'workflow-sign' in file_url
+                timeout_val = 60 if is_workflow_url else 45
+                
+                if is_workflow_url:
+                    print("  🔗 检测到工作流 URL，使用扩展超时...")
+                
+                response = req.get(
+                    file_url,
+                    headers=headers,
+                    timeout=timeout_val,
+                    allow_redirects=True,
+                    verify=True
+                )
+                
+                print(f"  📊 HTTP 状态码: {response.status_code}")
+                print(f"  📋 Content-Type: {response.headers.get('Content-Type', 'unknown')}")
+                print(f"  📏 响应大小: {len(response.text)} 字节")
+                
                 response.raise_for_status()
-                print(f"✅ 下载成功，大小: {len(response.text)} 字节")
+                
+                # ✅ 验证返回内容是否为有效数据
+                if len(response.text) < 50:
+                    print(f"❌ 文件内容过短，可能下载失败")
+                    print(f"原始内容（前200字）: {response.text[:200]}")
+                    return jsonify({
+                        'success': False,
+                        'error': '❌ 文件内容无效，可能是权限问题'
+                    }), 400
+                
+                # ✅ 检查是否返回了 HTML 错误页面（而非 CSV）
+                if response.text.strip().startswith('<'):
+                    print(f"❌ 返回的是 HTML 而非 CSV，可能是认证错误")
+                    print(f"HTML 片段: {response.text[:300]}")
+                    return jsonify({
+                        'success': False,
+                        'error': '❌ 文件下载失败（可能是权限或签名过期）'
+                    }), 400
                 
                 print("⏳ 正在解析 CSV...")
-                df = pd.read_csv(io.StringIO(response.text), encoding='utf-8-sig')
-                print(f"✅ 解析成功，列数: {len(df.columns)}")
+                
+                # 📌 改进：先尝试 utf-8-sig，如果失败再尝试 utf-8
+                try:
+                    df = pd.read_csv(io.StringIO(response.text), encoding='utf-8-sig')
+                except Exception:
+                    df = pd.read_csv(io.StringIO(response.text), encoding='utf-8')
+                
+                print(f"✅ 解析成功：{len(df)} 行，{len(df.columns)} 列")
                 reviews_list = df.to_dict('records')
                 print(f"✅ 转换成功，共 {len(reviews_list)} 条")
                 
+            except req.exceptions.Timeout:
+                print(f"\n❌ 下载超时（可能是文件过大或网络问题）")
+                return jsonify({'success': False, 'error': '❌ 文件下载超时，请重试'}), 408
+            
+            except req.exceptions.ConnectionError as e:
+                print(f"\n❌ 连接错误: {str(e)}")
+                return jsonify({'success': False, 'error': '❌ 无法连接到文件服务器'}), 503
+            
             except Exception as e:
                 print(f"\n❌ 错误: {str(e)}")
                 import traceback
